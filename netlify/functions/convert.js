@@ -1,10 +1,9 @@
 const axios = require('axios');
-
-const MINERU_TOKEN = 'eyJ0eXBlIjoiSldUIiwiYWxnIjoiSFM1MTIifQ.eyJqdGkiOiI1MDcwMDU4NiIsInJvbCI6IlJPTEVfUkVHSVNURVIiLCJpc3MiOiJPcGVuWExhYiIsImlhdCI6MTc3ODU2NjA3MiwiY2xpZW50SWQiOiJsa3pkeDU3bnZ5MjJqa3BxOXgydyIsInBob25lIjoiIiwib3BlbklkIjpudWxsLCJ1dWlkIjoiMjUzYWUxYWEtYzkzMi00ZmFhLWJlZGUtOTQ0MGEzYmE4N2RmIiwiZW1haWwiOiIiLCJleHAiOjE3ODYzNDIwNzJ9.61mmGOZuBleHoGkSXyOK1p20GT9dLlwe7h9khlZ-PcCFdIBk9n8TZgeh6mFEIq6cmgJAgnQOv8g-ii_DRCHdOw';
-const BASE_API_URL = 'https://mineru.net/api/v4';
+const CONVERT_API_BASE = 'https://v2.convertapi.com';
+const CONVERT_API_TOKEN = process.env.CONVERT_API_TOKEN || 'eyJ0eXBlIjoiSldUIiwiYWxnIjoiSFM1MTIifQ.eyJqdGkiOiI1MDcwMDU4NiIsInJvbCI6IlJPTEVfUkVHSVNURVIiLCJpc3MiOiJPcGVuWExhYiIsImlhdCI6MTc3ODU2NjA3MiwiY2xpZW50SWQiOiJsa3pkeDU3bnZ5MjJqa3BxOXgydyIsInBob25lIjoiIiwib3BlbklkIjpudWxsLCJ1dWlkIjoiMjUzYWUxYWEtYzkzMi00ZmFhLWJlZGUtOTQ0MGEzYmE4N2RmIiwiZW1haWwiOiIiLCJleHAiOjE3ODYzNDIwNzJ9.61mmGOZuBleHoGkSXyOK1p20GT9dLlwe7h9khlZ-PcCFdIBk9n8TZgeh6mFEIq6cmgJAgnQOv8g-ii_DRCHdOw'; // 建议使用环境变量
 
 exports.handler = async (event) => {
-  // 处理 CORS 预检
+  // 关键！处理预检请求
   if (event.httpMethod === 'OPTIONS') {
     return {
       statusCode: 200,
@@ -26,55 +25,64 @@ exports.handler = async (event) => {
   }
 
   try {
-    const { fileUrl, fileName, targetFormat } = JSON.parse(event.body);
-    if (!fileUrl) throw new Error('缺少文件地址');
+    // 解析前端传来的 base64 文件内容和参数
+    const { fileBase64, fileName, targetFormat } = JSON.parse(event.body);
+    
+    // 将 base64 转为 Buffer
+    const fileBuffer = Buffer.from(fileBase64, 'base64');
+    const FormData = require('form-data');
+    const form = new FormData();
+    form.append('File', fileBuffer, { filename: fileName });
 
-    const format = targetFormat || 'docx';
+    // 1. 上传文件到 ConvertAPI
+    const uploadRes = await axios.post(
+      `${CONVERT_API_BASE}/upload`,
+      form,
+      {
+        headers: {
+          ...form.getHeaders(),
+          'Authorization': `Bearer ${CONVERT_API_TOKEN}`
+        }
+      }
+    );
 
-    // 1. 提交 MinerU 解析任务
-    const taskRes = await axios.post(`${BASE_API_URL}/extract/task`, {
-      url: fileUrl,
-      checksum: '',
-      content: JSON.stringify({ file_name: fileName || 'document.pdf' })
-    }, {
+    if (uploadRes.data.Error) {
+      throw new Error(uploadRes.data.Error);
+    }
+    const fileId = uploadRes.data.FileId;
+    const fileExt = uploadRes.data.FileExt;
+
+    // 2. 调用转换接口
+    const convertUrl = `${CONVERT_API_BASE}/convert/${fileExt}/to/${targetFormat}`;
+    const convertBody = {
+      Parameters: [
+        { Name: 'FileId', Value: fileId },
+        { Name: 'StoreFile', Value: true }
+      ]
+    };
+
+    const convertRes = await axios.post(convertUrl, convertBody, {
       headers: {
-        'Content-Type': 'application/json',
-        ...(MINERU_TOKEN !== 'agent' && { Authorization: `Bearer ${MINERU_TOKEN}` })
+        'Authorization': `Bearer ${CONVERT_API_TOKEN}`,
+        'Content-Type': 'application/json'
       }
     });
 
-    if (taskRes.data.status !== 'success') {
-      throw new Error(taskRes.data.message || '任务提交失败');
+    if (convertRes.data.Error) throw new Error(convertRes.data.Error);
+    if (!convertRes.data.Files || convertRes.data.Files.length === 0) {
+      throw new Error('转换失败：服务器未返回文件');
     }
-    const taskId = taskRes.data.data.task_id;
-
-    // 2. 轮询任务结果（最多等待 60 秒）
-    let downloadUrl = null;
-    for (let i = 0; i < 30; i++) {
-      const statusRes = await axios.get(`${BASE_API_URL}/extract/task/${taskId}`, {
-        headers: {
-          ...(MINERU_TOKEN !== 'agent' && { Authorization: `Bearer ${MINERU_TOKEN}` })
-        }
-      });
-      if (statusRes.data.data.task_status === 'done') {
-        downloadUrl = statusRes.data.data.download_url;
-        break;
-      }
-      if (statusRes.data.data.task_status === 'failed') {
-        throw new Error('转换任务失败');
-      }
-      await new Promise(r => setTimeout(r, 2000));
-    }
-
-    if (!downloadUrl) throw new Error('转换超时，请重试');
 
     return {
       statusCode: 200,
       headers: { 'Access-Control-Allow-Origin': '*' },
-      body: JSON.stringify({ success: true, downloadUrl })
+      body: JSON.stringify({
+        success: true,
+        downloadUrl: convertRes.data.Files[0].Url
+      })
     };
   } catch (err) {
-    console.error('转换失败:', err.message);
+    console.error('函数错误:', err);
     return {
       statusCode: 500,
       headers: { 'Access-Control-Allow-Origin': '*' },
