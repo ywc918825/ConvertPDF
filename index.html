@@ -5,218 +5,63 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
   <title>高保真转换器</title>
   <style>
-    * { margin:0; padding:0; box-sizing:border-box; }
-    body { background:#f0f2f5; font-family:-apple-system,sans-serif; display:flex; justify-content:center; padding:20px; min-height:100vh; }
-    .container { width:100%; max-width:440px; background:#fff; border-radius:24px; padding:30px 24px; box-shadow:0 12px 30px rgba(0,0,0,0.05); }
-    h1 { text-align:center; font-size:26px; color:#1e293b; margin-bottom:24px; }
-    .upload-zone { border:2px dashed #cbd5e1; border-radius:16px; padding:32px; text-align:center; cursor:pointer; margin-bottom:20px; }
-    .upload-zone:active { border-color:#3b82f6; background:#eff6ff; }
-    .upload-icon { font-size:38px; }
-    .upload-text { font-size:16px; color:#334155; font-weight:500; }
-    .upload-hint { font-size:13px; color:#94a3b8; }
-    .format-row { display:flex; gap:8px; margin-bottom:20px; }
-    .format-btn { flex:1; padding:12px; border:none; border-radius:12px; background:#f1f5f9; font-size:14px; color:#475569; cursor:pointer; }
-    .format-btn.active { background:#2563eb; color:#fff; }
-    .progress-wrap { display:none; margin-bottom:20px; }
-    .progress-bar { height:8px; background:#e2e8f0; border-radius:10px; overflow:hidden; }
-    .progress-fill { height:100%; width:0; background:#2563eb; transition:width 0.3s; }
-    .progress-info { display:flex; justify-content:space-between; margin-top:8px; font-size:13px; color:#64748b; }
-    .btn { width:100%; padding:16px; border:none; border-radius:14px; font-size:17px; font-weight:600; cursor:pointer; margin-bottom:10px; }
-    .btn-primary { background:#2563eb; color:#fff; }
-    .btn-primary:disabled { background:#94a3b8; opacity:0.6; }
-    .btn-download { background:#10b981; display:none; }
-    .error { color:#dc2626; font-size:13px; text-align:center; margin-top:8px; }
-    .key-section { margin-top:20px; text-align:center; }
-    .key-input { width:80%; padding:8px; border:1px solid #cbd5e1; border-radius:8px; text-align:center; }
+    /* … 样式保持不变 … */
   </style>
 </head>
 <body>
-<div class="container">
-  <h1>📄 高保真转换器</h1>
+  <!-- … 页面结构保持不变 … -->
+  <script>
+    (function() {
+      const PROXY_API = '/api/convert';  // 相对路径！
+      // … 其他变量 …
 
-  <div class="upload-zone" id="uploadZone">
-    <div class="upload-icon">📂</div>
-    <div class="upload-text" id="fileNameDisplay">点击或拖拽上传文件</div>
-    <div class="upload-hint">PDF、Word、PPT，最大 50MB</div>
-  </div>
-  <input type="file" id="fileInput" hidden accept=".pdf,.doc,.docx,.ppt,.pptx,image/*">
+      async function startConvert() {
+        if (!selectedFile) return;
+        // … 检查 apiKey …
 
-  <div class="format-row">
-    <button class="format-btn active" data-format="docx">📝 Word</button>
-    <button class="format-btn" data-format="pdf">📄 PDF</button>
-    <button class="format-btn" data-format="txt">📃 TXT</button>
-    <button class="format-btn" data-format="pptx">📊 PPT</button>
-  </div>
+        convertBtn.disabled = true;
+        progressWrap.style.display = 'block';
+        downloadBtn.style.display = 'none';
+        errorMsg.textContent = '';
+        updateProgress(10, '准备文件...');
 
-  <div class="progress-wrap" id="progressWrap">
-    <div class="progress-bar"><div class="progress-fill" id="progressFill"></div></div>
-    <div class="progress-info">
-      <span id="progressLabel">上传中...</span>
-      <span id="progressPercent">0%</span>
-    </div>
-  </div>
+        try {
+          // 1. 将文件转为 base64
+          const reader = new FileReader();
+          const fileBase64 = await new Promise((resolve, reject) => {
+            reader.onload = () => resolve(reader.result.split(',')[1]);
+            reader.onerror = reject;
+            reader.readAsDataURL(selectedFile);
+          });
 
-  <button class="btn btn-primary" id="convertBtn" disabled>🚀 开始转换</button>
-  <button class="btn btn-download" id="downloadBtn">⬇️ 下载结果</button>
-  <div class="error" id="errorMsg"></div>
+          updateProgress(30, '正在转换...');
+          
+          // 2. 调用 Netlify 代理函数
+          const res = await fetch(PROXY_API, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              fileBase64,
+              fileName: selectedFile.name,
+              targetFormat: targetFormat
+            })
+          });
 
-  <div class="key-section">
-    <p>🔑 你的 ConvertAPI Token</p>
-    <input class="key-input" type="text" id="apiKeyInput" placeholder="粘贴 token_...">
-    <button id="saveKeyBtn" class="btn btn-primary" style="padding:10px; margin-top:5px;">保存密钥</button>
-    <p style="font-size:12px; color:#94a3b8;">免费注册获取：<a href="https://www.convertapi.com/a" target="_blank">convertapi.com</a></p>
-  </div>
-</div>
+          const data = await res.json();
+          if (!data.success) throw new Error(data.error || '转换失败');
 
-<script>
-  (function() {
-    const CONVERT_API_BASE = 'https://v2.convertapi.com';
-    let apiKey = localStorage.getItem('convertapi_token') || '';
-
-    const uploadZone = document.getElementById('uploadZone');
-    const fileInput = document.getElementById('fileInput');
-    const fileNameDisplay = document.getElementById('fileNameDisplay');
-    const convertBtn = document.getElementById('convertBtn');
-    const downloadBtn = document.getElementById('downloadBtn');
-    const progressWrap = document.getElementById('progressWrap');
-    const progressFill = document.getElementById('progressFill');
-    const progressLabel = document.getElementById('progressLabel');
-    const progressPercent = document.getElementById('progressPercent');
-    const errorMsg = document.getElementById('errorMsg');
-    const apiKeyInput = document.getElementById('apiKeyInput');
-    const saveKeyBtn = document.getElementById('saveKeyBtn');
-
-    let selectedFile = null;
-    let targetFormat = 'docx';
-
-    apiKeyInput.value = apiKey;
-
-    saveKeyBtn.addEventListener('click', () => {
-      const key = apiKeyInput.value.trim();
-      if (key) {
-        localStorage.setItem('convertapi_token', key);
-        apiKey = key;
-        alert('密钥已保存');
-      }
-    });
-
-    uploadZone.addEventListener('click', () => fileInput.click());
-    uploadZone.addEventListener('dragover', e => e.preventDefault());
-    uploadZone.addEventListener('drop', e => {
-      e.preventDefault();
-      handleFile(e.dataTransfer.files[0]);
-    });
-    fileInput.addEventListener('change', e => handleFile(e.target.files[0]));
-
-    function handleFile(file) {
-      if (!file) return;
-      if (file.size > 50 * 1024 * 1024) {
-        errorMsg.textContent = '文件不能超过 50MB';
-        return;
-      }
-      selectedFile = file;
-      fileNameDisplay.textContent = file.name;
-      convertBtn.disabled = false;
-      resetUI();
-    }
-
-    document.querySelectorAll('.format-btn').forEach(btn => {
-      btn.addEventListener('click', function() {
-        document.querySelectorAll('.format-btn').forEach(b => b.classList.remove('active'));
-        this.classList.add('active');
-        targetFormat = this.dataset.format;
-      });
-    });
-
-    convertBtn.addEventListener('click', startConvert);
-    downloadBtn.addEventListener('click', () => {
-      if (downloadBtn.dataset.url) window.open(downloadBtn.dataset.url, '_blank');
-    });
-
-    function resetUI() {
-      progressWrap.style.display = 'none';
-      downloadBtn.style.display = 'none';
-      convertBtn.style.display = 'block';
-      errorMsg.textContent = '';
-      updateProgress(0, '');
-    }
-
-    function updateProgress(percent, label) {
-      progressFill.style.width = percent + '%';
-      progressPercent.textContent = percent + '%';
-      if (label) progressLabel.textContent = label;
-    }
-
-    async function uploadToConvertAPI(file) {
-      const form = new FormData();
-      form.append('File', file);
-
-      const res = await fetch(`${CONVERT_API_BASE}/upload`, {
-        method: 'POST',
-        headers: { 'Authorization': 'Bearer ' + apiKey },
-        body: form
-      });
-      const data = await res.json();
-      if (data.Error) throw new Error(data.Error);
-      return { fileId: data.FileId, fileExt: data.FileExt };
-    }
-
-    async function startConvert() {
-      if (!selectedFile) return;
-      if (!apiKey) {
-        errorMsg.textContent = '请先填写并保存 ConvertAPI Token';
-        return;
-      }
-
-      convertBtn.disabled = true;
-      progressWrap.style.display = 'block';
-      downloadBtn.style.display = 'none';
-      errorMsg.textContent = '';
-
-      try {
-        // 1. 上传文件到 ConvertAPI
-        updateProgress(10, '上传文件中...');
-        const { fileId, fileExt } = await uploadToConvertAPI(selectedFile);
-        updateProgress(30, '正在转换...');
-
-        // 2. 调用转换接口
-        const convertUrl = `${CONVERT_API_BASE}/convert/${fileExt}/to/${targetFormat}`;
-        const body = {
-          Parameters: [
-            { Name: 'FileId', Value: fileId },
-            { Name: 'StoreFile', Value: true }
-          ]
-        };
-
-        const convertRes = await fetch(convertUrl, {
-          method: 'POST',
-          headers: {
-            'Authorization': 'Bearer ' + apiKey,
-            'Content-Type': 'application/json'
-          },
-          body: JSON.stringify(body)
-        });
-        const convertData = await convertRes.json();
-
-        if (convertData.Error) throw new Error(convertData.Error);
-        if (!convertData.Files || convertData.Files.length === 0) {
-          throw new Error('服务器未返回文件，可能是格式不支持');
+          updateProgress(100, '转换完成！');
+          convertBtn.style.display = 'none';
+          downloadBtn.style.display = 'block';
+          downloadBtn.dataset.url = data.downloadUrl;
+        } catch (err) {
+          console.error(err);
+          errorMsg.textContent = '转换失败: ' + err.message;
+          updateProgress(0, '');
+          convertBtn.disabled = false;
         }
-
-        const resultUrl = convertData.Files[0].Url;
-        updateProgress(100, '转换完成！');
-        convertBtn.style.display = 'none';
-        downloadBtn.style.display = 'block';
-        downloadBtn.dataset.url = resultUrl;
-
-      } catch (err) {
-        console.error(err);
-        errorMsg.textContent = '转换失败: ' + err.message;
-        updateProgress(0, '');
-        convertBtn.disabled = false;
       }
-    }
-  })();
-</script>
+    })();
+  </script>
 </body>
 </html>
